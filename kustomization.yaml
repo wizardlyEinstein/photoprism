@@ -1,0 +1,13 @@
+images:
+- name: photoprism/photoprism
+  newTag: 240420-ce
+- name: mariadb
+  newTag: 11.3.2
+
+namespace: photoprism 
+
+resources:
+- photo.yaml 
+
+generators:
+- secrets.yaml

@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: photoprism
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: photoprism
+  namespace: photoprism
+spec:
+  selector:
+    matchLabels:
+      app: photoprism
+  serviceName: photoprism
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: photoprism
+    spec:
+      containers:
+      - name: photoprism
+        image: photoprism/photoprism:latest
+        env:
+        - name: PHOTOPRISM_DEBUG
+          value: "true"
+        - name: PHOTOPRISM_DATABASE_DRIVER
+          value: mysql
+        - name: PHOTOPRISM_HTTP_HOST
+          value: 0.0.0.0
+        - name: PHOTOPRISM_HTTP_PORT
+          value: "2342"
+        # Load database DSN & admin password from secret
+        envFrom:
+        - secretRef:
+            name: secrets
+            optional: false
+        ports:
+        - containerPort: 2342
+          name: http
+        volumeMounts:
+        - mountPath: /photoprism/originals
+          name: originals
+        - mountPath: /photoprism/import
+          name: import
+        - mountPath: /photoprism/storage
+          name: storage
+        readinessProbe:
+          httpGet:
+            path: /api/v1/status
+            port: http
+      volumes:
+      - name: import 
+        hostPath:
+          path: /storage/data/photoprism/import
+          type: Directory
+      - name: originals 
+        hostPath:
+          path: /storage/data/photoprism/orig
+          # readOnly: true # Disables import and upload!
+          type: Directory
+      - name:  storage 
+        hostPath:
+          path: /storage/data/photoprism/storage
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photoprism
+  namespace: photoprism
+spec:
+  ports:
+  - name: http
+    port: 8888 
+    protocol: TCP
+    targetPort: http 
+  selector:
+    app: photoprism
+  type: LoadBalancer 
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-deployment
+  namespace: photoprism
+spec: # specification for deployment resource
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template: # blueprint for pods
+    metadata:
+      labels:
+        app: mariadb # service will look for this label
+    spec: # specification for pods
+      containers:
+      - name: mariadb
+        image: mariadb
+        ports:
+        - containerPort: 3306 #default one
+        env:
+        - name: MARIADB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: secrets
+              key: MARIADB_PASSWORD 
+        - name: MARIADB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: secrets
+              key: MARIADB_ROOT_PASSWORD 
+        - name: MARIADB_DATABASE
+          value: prism 
+        - name: MARIADB_USER
+          value: prism 
+        volumeMounts:
+        - name: mariadb
+          mountPath: /var/lib/mysql
+      volumes:
+      - name:  mariadb 
+        hostPath:
+          path: /storage/data/photoprism/mariadb
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-internal-service
+  namespace: photoprism
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: photoprism-backup
+  namespace: photoprism
+spec:
+  schedule: "0 */12 * * *"
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          containers:
+            - name: dump
+              image: photoprism/photoprism:latest
+              volumeMounts:
+                - name: backup 
+                  mountPath: /backup
+              command: ["/bin/sh", "-c"]
+              args:
+                - photoprism backup -f /backup/photoprism.backup 
+              # Load database DSN & admin password from secret
+              envFrom:
+               - secretRef:
+                   name: secrets
+                   optional: false
+              env:
+               - name: PHOTOPRISM_DATABASE_DRIVER
+                 value: mysql
+          restartPolicy: Never
+          volumes:
+            - name: backup 
+              hostPath:
+                path: /storage/data/photoprism/backup
+                type: Directory
+ 
